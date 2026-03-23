@@ -1,0 +1,40 @@
+# Sensitive files — never push to GitHub
+.env
+*.env
+
+# Company data — never push to GitHub
+Enterprise_Model_Inventory.xlsx
+documents/
+faiss_index/
+
+# Downloaded packages
+packages/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+coe_env/
+coe_onprem_test/
+venv/
+env/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/

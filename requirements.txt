@@ -1,0 +1,46 @@
+# COE Analytics Chatbot — On-Prem Production Requirements
+# Architecture: FastAPI + Azure OpenAI + DuckDB + FAISS
+# Last updated: March 2026
+
+# --- API Framework ---
+fastapi==0.115.0
+uvicorn==0.34.0
+python-multipart==0.0.22
+
+# --- Azure OpenAI ---
+openai==1.82.0
+
+# --- LangChain (RAG pipeline) ---
+langchain==0.3.27
+langchain-community==0.3.31
+langchain-core==0.3.83
+langchain-openai==0.3.16
+langchain-text-splitters==0.3.11
+
+# --- Vector Store ---
+faiss-cpu==1.13.2
+
+# --- Data & SQL ---
+pandas==2.3.3
+duckdb==1.5.0
+openpyxl==3.1.5
+numpy==2.4.2
+
+# --- Document Ingestion ---
+unstructured==0.21.5
+python-docx==1.2.0
+pypdf==6.7.4
+
+# --- Core Utilities ---
+pydantic==2.12.5
+python-dotenv==1.2.1
+tenacity==9.1.4
+requests==2.32.5
+httpx==0.28.1
+PyYAML==6.0.3
+typing_extensions==4.15.0
+
+# --- Security ---
+python-jose==3.5.0
+passlib==1.7.4
+bcrypt==4.3.0
