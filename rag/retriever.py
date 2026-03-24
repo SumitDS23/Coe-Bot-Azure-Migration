@@ -6,7 +6,7 @@ Loads the FAISS vector store from local disk or GCS depending on config.
 import logging
 from pathlib import Path
 from langchain_community.vectorstores import FAISS
-from rag.embeddings import GeminiEmbeddings
+from rag.embeddings import AzureEmbeddings          # ← Changed
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -18,7 +18,7 @@ def load_retriever():
     - If USE_GCS=true: downloads index from GCS first
     - Otherwise: loads from LOCAL_INDEX_PATH
     """
-    embedding_model = GeminiEmbeddings()
+    embedding_model = AzureEmbeddings()              # ← Changed
     local_path = settings.local_index_path
 
     if settings.use_gcs:

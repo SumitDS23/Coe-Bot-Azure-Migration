@@ -1,12 +1,14 @@
 """
 rag/router.py
 Intents: INVENTORY or RAG only.
+Modified to use Azure OpenAI instead of Gemini/Gemma.
 """
 import logging
 import json
 import re
 from enum import Enum
 from pydantic import BaseModel
+from openai import AzureOpenAI
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -56,46 +58,13 @@ CRITICAL EXAMPLES:
 "What methodology is used for fraud detection?"   -> RAG
 "Explain the churn prediction approach"           -> RAG
 
-Return valid JSON only.
+Return valid JSON only in this format:
+{"intent": "INVENTORY" or "RAG", "reasoning": "your reasoning here"}
 """
-## Gemini Model Function (use for Gemini models - supports system_instruction and structured output)
-# def classify_intent(question: str, last_intent: str = "") -> RouterDecision:
-#     from google import genai
-#     client = genai.Client(api_key=settings.google_api_key_llm)
-#
-#     context_hint = ""
-#     if last_intent == "INVENTORY":
-#         context_hint = (
-#             "\nCONTEXT: The previous question was answered from the INVENTORY. "
-#             "If this question is a follow-up or continuation (e.g. 'list all', "
-#             "'show me', 'which ones', 'can you list'), route to INVENTORY."
-#         )
-#     elif last_intent == "RAG":
-#         context_hint = (
-#             "\nCONTEXT: The previous question was answered from the RAG documents. "
-#             "If this question is a follow-up about the same topic, route to RAG."
-#         )
-#
-#     system_prompt_with_context = ROUTER_PROMPT + context_hint
-#
-#     response = client.models.generate_content(
-#         model=settings.llm_model,
-#         config={
-#             "system_instruction": system_prompt_with_context,
-#             "response_mime_type": "application/json",
-#             "response_schema": RouterDecision,
-#             "temperature": 0,
-#         },
-#         contents=[{"role": "user", "parts": [{"text": question}]}],
-#     )
-#     decision = response.parsed
-#     logger.info(f"Routed to: {decision.intent} | Reason: {decision.reasoning}")
-#     return decision
-##Gemma model function
-def classify_intent(question: str, last_intent: str = "") -> RouterDecision:
-    from google import genai
-    client = genai.Client(api_key=settings.google_api_key_llm)
 
+
+def classify_intent(question: str, last_intent: str = "") -> RouterDecision:
+    # Build context hint based on last intent
     context_hint = ""
     if last_intent == "INVENTORY":
         context_hint = (
@@ -109,23 +78,45 @@ def classify_intent(question: str, last_intent: str = "") -> RouterDecision:
             "If this question is a follow-up about the same topic, route to RAG."
         )
 
-    full_prompt = f"{ROUTER_PROMPT}{context_hint}\n\nUser question: {question}"
-
-    response = client.models.generate_content(
-        model=settings.llm_model,
-        config={"temperature": 0},
-        contents=[{"role": "user", "parts": [{"text": full_prompt}]}],
+    # Initialize Azure OpenAI client
+    client = AzureOpenAI(
+        api_key=settings.azure_openai_api_key,
+        azure_endpoint=settings.azure_openai_endpoint,
+        api_version=settings.azure_openai_api_version,
     )
 
-    text = response.text.strip()
+    # Build messages
+    messages = [
+        {
+            "role": "system",
+            "content": ROUTER_PROMPT + context_hint
+        },
+        {
+            "role": "user",
+            "content": question
+        }
+    ]
+
+    # Call Azure OpenAI
+    response = client.chat.completions.create(
+        model=settings.azure_openai_deployment_name,  # e.g. gpt-4o
+        messages=messages,
+        temperature=0,
+        response_format={"type": "json_object"},      # enforces JSON output
+    )
+
+    # Parse response
+    text = response.choices[0].message.content.strip()
     text = re.sub(r"```(?:json)?", "", text).strip().rstrip("```").strip()
 
     try:
         data = json.loads(text)
-        return RouterDecision(
+        decision = RouterDecision(
             intent=Intent(data["intent"].upper()),
             reasoning=data.get("reasoning", ""),
         )
+        logger.info(f"Routed to: {decision.intent} | Reason: {decision.reasoning}")
+        return decision
     except Exception as e:
         logger.error(f"Router parse failed: {e} | raw: {text}")
         return RouterDecision(intent=Intent.RAG, reasoning="parse fallback")

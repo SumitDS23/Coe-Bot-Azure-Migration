@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from langchain_community.document_loaders import DirectoryLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
-from rag.embeddings import GeminiEmbeddings
+from langchain_openai import AzureOpenAIEmbeddings  # ← Changed
 from config.settings import settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -49,9 +49,14 @@ def main():
     ).split_documents(raw_documents)
     logger.info(f"  → {len(chunks)} chunks created")
 
-    # 3. Embed + build index
+    # 3. Embed + build index using Azure OpenAI
     logger.info("Embedding chunks and building FAISS index...")
-    embedding_model = GeminiEmbeddings()
+    embedding_model = AzureOpenAIEmbeddings(  # ← Changed
+        azure_deployment=settings.azure_embedding_deployment,
+        azure_endpoint=settings.azure_openai_endpoint,
+        api_key=settings.azure_openai_api_key,
+        api_version=settings.azure_openai_api_version,
+    )
     vector_store = FAISS.from_documents(chunks, embedding_model)
 
     # 4. Save locally
