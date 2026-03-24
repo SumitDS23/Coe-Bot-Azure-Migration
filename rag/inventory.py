@@ -3,6 +3,7 @@ rag/inventory.py
 Text-to-SQL inventory engine.
 Primary: LLM generates SQL from natural language question.
 Fallback: filter-based query (inventory_fallback.py logic).
+Modified to use Azure OpenAI instead of Gemini/Gemma.
 """
 
 import json
@@ -11,11 +12,24 @@ import re
 import pandas as pd
 import duckdb
 from pathlib import Path
+from openai import AzureOpenAI                          # ← Changed
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
 _df: pd.DataFrame = None
+
+# ---------------------------------------------------------------------------
+# Azure OpenAI client helper
+# ---------------------------------------------------------------------------
+
+def _get_azure_client() -> AzureOpenAI:
+    """Return a reusable Azure OpenAI client."""
+    return AzureOpenAI(
+        api_key=settings.azure_openai_api_key,
+        azure_endpoint=settings.azure_openai_endpoint,
+        api_version=settings.azure_openai_api_version,
+    )
 
 # ---------------------------------------------------------------------------
 # SCHEMA — passed to LLM for SQL generation
@@ -126,16 +140,14 @@ GLOBAL_SIGNALS = [
 
 
 # ---------------------------------------------------------------------------
-# HELPERS — defined first so all functions below can use them
+# HELPERS
 # ---------------------------------------------------------------------------
 
 def _is_global_query(question: str) -> bool:
-    """Detect if user wants data across all LOBs."""
     return any(signal in question.lower() for signal in GLOBAL_SIGNALS)
 
 
 def _infer_filters_from_sql(sql: str, accumulated_filters: dict) -> dict:
-    """Infer active filters from generated SQL to maintain context."""
     filters = accumulated_filters.copy()
     sql_lower = sql.lower()
 
@@ -225,8 +237,7 @@ def get_inventory_stats() -> dict:
 
 def generate_sql(question: str, turn_history: list, accumulated_filters: dict) -> str:
     """Use LLM to convert natural language question to SQL."""
-    from google import genai
-    client = genai.Client(api_key=settings.google_api_key_llm)
+    client = _get_azure_client()                        # ← Changed
 
     history_text = "\n".join(
         f"Turn {i+1}: Q='{h['question']}' | filters={h['filters']} | rows={h['result_count']}"
@@ -256,19 +267,18 @@ USER QUESTION: {question}
 Return ONLY the SQL query:
 """
 
-    response = client.models.generate_content(
-        model=settings.llm_model,
-        config={"temperature": 0},
-        contents=[{"role": "user", "parts": [{"text": full_prompt}]}],
+    response = client.chat.completions.create(     # ← Changed
+        model=settings.azure_openai_deployment_name,
+        messages=[{"role": "user", "content": full_prompt}],
+        temperature=0,
     )
 
-    sql = response.text.strip()
+    sql = response.choices[0].message.content.strip()      # ← Changed
     sql = re.sub(r"```(?:sql)?", "", sql).strip().rstrip("```").strip()
     return sql
 
 
 def is_safe_sql(sql: str) -> bool:
-    """Only allow SELECT statements."""
     forbidden = ["drop", "insert", "update", "delete", "alter", "create", "truncate"]
     sql_lower = sql.lower().strip()
     return sql_lower.startswith("select") and not any(kw in sql_lower for kw in forbidden)
@@ -281,8 +291,7 @@ def is_safe_sql(sql: str) -> bool:
 def _fallback_parse_question(question: str, accumulated_filters: dict,
                                turn_history: list) -> dict:
     """Fallback: extract filters and query type from question."""
-    from google import genai
-    client = genai.Client(api_key=settings.google_api_key_llm)
+    client = _get_azure_client()                        # ← Changed
 
     history_text = "\n".join(
         f"Turn {i+1}: Q='{h['question']}' filters={h['filters']} results={h['result_count']}"
@@ -308,12 +317,13 @@ Return ONLY JSON:
 }}
 """
     try:
-        response = client.models.generate_content(
-            model=settings.llm_model,
-            config={"temperature": 0},
-            contents=[{"role": "user", "parts": [{"text": prompt}]}],
+        response = client.chat.completions.create(  # ← Changed
+            model=settings.azure_openai_deployment_name,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            response_format={"type": "json_object"},
         )
-        text = re.sub(r"```(?:json)?", "", response.text.strip()).strip().rstrip("```").strip()
+        text = response.choices[0].message.content.strip()     # ← Changed
         return json.loads(text)
     except Exception as e:
         logger.error(f"Fallback parse failed: {e}")
@@ -362,8 +372,7 @@ def generate_nl_response(question: str, result_df: pd.DataFrame,
                           turn_history: list, final_filters: dict,
                           sql_used: str) -> str:
     """Convert raw SQL results to natural language response."""
-    from google import genai
-    client = genai.Client(api_key=settings.google_api_key_llm)
+    client = _get_azure_client()                        # ← Changed
 
     history_text = "\n".join(
         f"Q: {h['question']}" for h in turn_history[-4:]
@@ -405,12 +414,12 @@ Respond in natural, conversational language:
 """
 
     try:
-        response = client.models.generate_content(
-            model=settings.llm_model,
-            config={"temperature": 0.3},
-            contents=[{"role": "user", "parts": [{"text": prompt}]}],
+        response = client.chat.completions.create(  # ← Changed
+            model=settings.azure_openai_deployment_name,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
         )
-        return response.text.strip()
+        return response.choices[0].message.content.strip()     # ← Changed
     except Exception as e:
         logger.error(f"NL response failed: {e}")
         if result_df.empty:
@@ -441,7 +450,6 @@ def run_inventory_query(question: str, accumulated_filters: dict,
     topic_shift = False
     parsed = {}
 
-    # ── GLOBAL QUERY CHECK — before everything ────────────────────────────
     if _is_global_query(question) and accumulated_filters.get("LOB"):
         return (
             "",
@@ -453,7 +461,6 @@ def run_inventory_query(question: str, accumulated_filters: dict,
 
     effective_filters = accumulated_filters.copy()
 
-    # ── PRIMARY: Text-to-SQL ──────────────────────────────────────────────
     try:
         sql = generate_sql(question, turn_history, effective_filters)
         logger.info(f"[Text-to-SQL] Generated: {sql}")
@@ -461,7 +468,6 @@ def run_inventory_query(question: str, accumulated_filters: dict,
         if not is_safe_sql(sql):
             raise ValueError(f"Unsafe SQL blocked: {sql}")
 
-        # ── TOPIC SHIFT CHECK — before executing SQL ──────────────────────
         prospective_filters = _infer_filters_from_sql(sql, {})
         new_lob = prospective_filters.get("LOB")
         old_lob = accumulated_filters.get("LOB")
@@ -480,8 +486,6 @@ def run_inventory_query(question: str, accumulated_filters: dict,
 
     except Exception as primary_error:
         logger.warning(f"[Text-to-SQL] FAILED: {primary_error} | Trying fallback...")
-        import streamlit as st
-        st.caption(f"⚠️ DEBUG: Text-to-SQL failed ({primary_error}) — using filter fallback. SQL: `{sql}`")
 
         used_fallback = True
         try:
